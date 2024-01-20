@@ -101,6 +101,9 @@ public class Server extends AbstractVerticle {
 			router.post("/stop").blockingHandler(ctx -> {
 				// stopVM(ctx);
 			});
+			router.get("/has-capacity").blockingHandler(ctx -> {
+				hasCapacity(ctx);
+			});
 			server.requestHandler(router);
 			return server.listen(port);
 		}).onSuccess(s -> System.out.println("listening on " + port))
@@ -275,6 +278,31 @@ public class Server extends AbstractVerticle {
 			e.printStackTrace();
 		}
 		ctx.end(new JsonObject().put("port", port).encode());
+	}
+
+	private void hasCapacity(RoutingContext ctx) {
+		try {
+			int numRunning = countRunningContainers();
+			int maxRunning = config.getInteger("max_vms");
+
+			ctx.end(
+				new JsonObject().put("hasCapacity", numRunning < maxRunning).encode());
+		} catch (Exception e) {
+			e.printStackTrace();
+			ctx.fail(e);
+		}
+	}
+
+	private int countRunningContainers() throws Exception {
+		DockerClient docker = clients.take();
+		try {
+			return docker.listContainersCmd().withShowAll(true).exec().stream()
+				.filter(c -> c.getImageId().equals(image.getId()))
+				.filter(c -> c.getState().equals("running")).collect(Collectors.toList())
+				.size();
+		} finally {
+			clients.add(docker);
+		}
 	}
 
 }
