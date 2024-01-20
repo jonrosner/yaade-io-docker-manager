@@ -32,6 +32,7 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
+import io.yaade.vm.docker.manager.model.requests.CreateVMRequest;
 import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
@@ -191,16 +192,16 @@ public class Server extends AbstractVerticle {
 		return false;
 	}
 
-	private Container getOrCreateContainer(String name, JsonObject data)
+	private Container getOrCreateContainer(CreateVMRequest req)
 		throws Exception {
-		Container result = containers.get(name);
+		Container result = containers.get(req.vmName());
 		if (result != null) {
 			return result;
 		}
 		DockerClient docker = clients.take();
 		try {
 			HostConfig hostConfig = HostConfig.newHostConfig()
-				.withBinds(new Bind("/app/data", new Volume("/" + name)))
+				.withBinds(new Bind("/app/data", new Volume("/" + req.vmName())))
 				.withPortBindings(
 					new PortBinding(Binding.bindPort(0),
 						new ExposedPort(containerPort)));
@@ -212,14 +213,15 @@ public class Server extends AbstractVerticle {
 
 			CreateContainerResponse cc = docker.createContainerCmd(imageId)
 				.withHostConfig(hostConfig)
-				.withEnv("YAADE_ADMIN_USERNAME=" + data.getString("id"))
-				.withName(name)
+				.withEnv("YAADE_ADMIN_USERNAME=" + req.yaadeAdminUser(),
+					"YAADE_ADMIN_PASSWORD=" + req.yaadeAdminPwd())
+				.withName(req.vmName())
 				.exec();
 
 			String cid = cc.getId();
 			result = getContainerById(cid, docker)
 				.orElseThrow(() -> new RuntimeException("container not found: " + cid));
-			containers.put(name, result);
+			containers.put(req.vmName(), result);
 
 			return result;
 		} finally {
@@ -255,12 +257,12 @@ public class Server extends AbstractVerticle {
 
 	private void startVM(RoutingContext ctx) {
 		System.out.println("startVM");
-		JsonObject data = ctx.body().asJsonObject();
-		String name = containerName(data.getString("id"));
+		JsonObject body = ctx.body().asJsonObject();
+		CreateVMRequest req = body.mapTo(CreateVMRequest.class);
 		int port;
 		try {
-			Container container = getOrCreateContainer(name, data);
-			startContainer(name, container);
+			Container container = getOrCreateContainer(req);
+			startContainer(req.vmName(), container);
 			port = container.getPorts()[0].getPublicPort();
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -273,10 +275,6 @@ public class Server extends AbstractVerticle {
 			e.printStackTrace();
 		}
 		ctx.end(new JsonObject().put("port", port).encode());
-	}
-
-	private String containerName(String id) {
-		return "yaade-" + id;
 	}
 
 }
