@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,7 +38,7 @@ import lombok.RequiredArgsConstructor;
 public class Server extends AbstractVerticle {
 
 	private final JsonObject config;
-	
+
 	public int port;
 	private int maxDockerClients;
 	private Set<String> allowedIps;
@@ -59,8 +60,8 @@ public class Server extends AbstractVerticle {
 			this.port = config.getInteger("port");
 			this.maxDockerClients = config.getInteger("max_docker_clients");
 			this.allowedIps = config.getJsonArray("allowed_ips").stream()
-					.map(Object::toString)
-					.collect(Collectors.toSet());
+				.map(Object::toString)
+				.collect(Collectors.toSet());
 			this.imageName = config.getString("image_name");
 			this.yaadeStartupTime = config.getLong("yaade_startup_time");
 			this.containerPort = config.getInteger("container_port");
@@ -73,33 +74,38 @@ public class Server extends AbstractVerticle {
 			ex.printStackTrace();
 		}
 
-		initDocker();
+		vertx.executeBlocking(() -> {
+			initDocker();
+			return null;
+		}).compose(r -> {
+			// start web server
+			HttpServer server = vertx.createHttpServer();
+			Router router = Router.router(vertx);
 
-		// start web server
-		HttpServer server = vertx.createHttpServer();
-		Router router = Router.router(vertx);
-
-		// allow connections only from gateway host
-		router.route().handler(ctx -> firewall(ctx));
-		router.post("/init").blockingHandler(ctx -> {
-			try {
-				initDocker();
-				ctx.end();
-			} catch (Exception e) {
+			// allow connections only from gateway host
+			router.route().handler(ctx -> firewall(ctx));
+			router.post("/init").blockingHandler(ctx -> {
+				try {
+					initDocker();
+					ctx.end();
+				} catch (Exception e) {
+					e.printStackTrace();
+					ctx.fail(e);
+				}
+			});
+			router.route().handler(BodyHandler.create());
+			router.post("/start").blockingHandler(ctx -> {
+				startVM(ctx);
+			});
+			router.post("/stop").blockingHandler(ctx -> {
+				// stopVM(ctx);
+			});
+			server.requestHandler(router);
+			return server.listen(port);
+		}).onSuccess(s -> System.out.println("listening on " + port))
+			.onFailure(e -> {
 				e.printStackTrace();
-				ctx.fail(e);
-			}
-		});
-		router.route().handler(BodyHandler.create());
-		router.post("/start").blockingHandler(ctx -> {
-			startVM(ctx);
-		});
-		router.post("/stop").blockingHandler(ctx -> {
-			// stopVM(ctx);
-		});
-		server.requestHandler(router);
-		server.listen(port).onSuccess(s -> System.out.println("listening on " + port))
-			.onFailure(e -> e.printStackTrace());
+			});
 	}
 
 	private void initDocker() throws Exception {
@@ -129,7 +135,6 @@ public class Server extends AbstractVerticle {
 			this.containers.put(container.getNames()[0].substring(1), container);
 		// return client to pool
 		clients.add(docker);
-
 	}
 
 	private void firewall(RoutingContext ctx) {
@@ -137,8 +142,9 @@ public class Server extends AbstractVerticle {
 		if (!allowedIps.contains(remoteIp)) {
 			System.out.println("firewall: bad remote: " + remoteIp);
 			ctx.fail(401);
-		} else
+		} else {
 			ctx.next();
+		}
 	}
 
 	private DockerClient newClient() {
@@ -157,78 +163,94 @@ public class Server extends AbstractVerticle {
 	}
 
 	private void startContainer(String name, Container container) throws Exception {
-		if (isRunning(name))
+		if (isRunning(name)) {
 			return;
+		}
 		System.out.println("+startContainer " + name);
 		DockerClient docker = clients.take();
+		try {
+			String containerId = container.getId();
+			if (containerId == null) {
+				throw new RuntimeException("container not found: " + name);
+			}
 
-		String containerId = container.getId();
-		if (containerId == null) {
-			throw new RuntimeException("container not found: " + name);
+			docker.startContainerCmd(containerId).exec();
+			System.out.println("-startContainer " + name);
+		} finally {
+			clients.add(docker);
 		}
-
-		docker.startContainerCmd(containerId).exec();
-		clients.add(docker);
-		System.out.println("-startContainer " + name);
 	}
 
 	private boolean isRunning(String name) throws Exception {
-		Container container = getContainerByName(name);
-		if (container != null)
-			containers.put(name, container);
-		return container != null && container.getState().equals("running");
+		Optional<Container> container = getContainerByName(name);
+		if (container.isPresent()) {
+			containers.put(name, container.get());
+			return container.get().getState().equals("running");
+		}
+
+		return false;
 	}
 
-	private Container getOrCreateContainer(String name, JsonObject data) throws Exception {
+	private Container getOrCreateContainer(String name, JsonObject data)
+		throws Exception {
 		Container result = containers.get(name);
 		if (result != null) {
 			return result;
 		}
 		DockerClient docker = clients.take();
+		try {
+			HostConfig hostConfig = HostConfig.newHostConfig()
+				.withBinds(new Bind("/app/data", new Volume("/" + name)))
+				.withPortBindings(
+					new PortBinding(Binding.bindPort(data.getInteger("vmPort")),
+						new ExposedPort(containerPort)));
 
-		HostConfig hostConfig = HostConfig.newHostConfig()
-			.withBinds(new Bind("/app/data", new Volume("/" + name)))
-			.withPortBindings(new PortBinding(Binding.bindPort(data.getInteger("vmPort")),
-				new ExposedPort(containerPort)));
+			String imageId = image.getId();
+			if (imageId == null) {
+				throw new RuntimeException("image not found: " + imageName);
+			}
 
-		String imageId = image.getId();
-		if (imageId == null) {
-			throw new RuntimeException("image not found: " + imageName);
+			CreateContainerResponse cc = docker.createContainerCmd(imageId)
+				.withHostConfig(hostConfig)
+				.withEnv("YAADE_ADMIN_USERNAME=" + data.getString("id"))
+				.withName(name)
+				.exec();
+
+			String cid = cc.getId();
+			result = getContainerById(cid, docker)
+				.orElseThrow(() -> new RuntimeException("container not found: " + cid));
+			containers.put(name, result);
+
+			return result;
+		} finally {
+			clients.add(docker);
 		}
-
-		CreateContainerResponse cc = docker.createContainerCmd(imageId)
-			.withHostConfig(hostConfig)
-			.withEnv("YAADE_ADMIN_USERNAME=" + data.getString("id"))
-			.withName(name)
-			.exec();
-		clients.add(docker);
-
-		String cid = cc.getId();
-		result = getContainerById(cid);
-		containers.put(name, result);
-
-		return result;
 	}
 
-	private Container getContainerById(String cid) throws Exception {
-		DockerClient docker = clients.take();
-		List<Container> cs = docker.listContainersCmd().withShowAll(true).exec().stream()
-			.filter(c -> c.getId().equals(cid)).collect(Collectors.toList());
-		Container result = cs.get(0);
-		clients.add(docker);
-		return result;
+	private Optional<Container> getContainerById(String cid, DockerClient docker) {
+		return docker
+			.listContainersCmd()
+			.withShowAll(true)
+			.exec()
+			.stream()
+			.filter(c -> c.getId().equals(cid))
+			.findFirst();
 	}
 
-	private Container getContainerByName(String name) throws Exception {
+	private Optional<Container> getContainerByName(String name) throws Exception {
 		DockerClient docker = clients.take();
-		final String cName = "/" + name;
-		List<Container> cs = docker.listContainersCmd().withShowAll(true).exec().stream()
-			.filter(
-				c -> c.getNames() != null && Arrays.asList(c.getNames()).contains(cName))
-			.collect(Collectors.toList());
-		Container result = cs.isEmpty() ? null : cs.get(0);
-		clients.add(docker);
-		return result;
+		try {
+			return docker
+				.listContainersCmd()
+				.withShowAll(true)
+				.exec()
+				.stream()
+				.filter(
+					c -> c != null && Arrays.asList(c.getNames()).contains("/" + name))
+				.findFirst();
+		} finally {
+			clients.add(docker);
+		}
 	}
 
 	private void startVM(RoutingContext ctx) {
