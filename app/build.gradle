@@ -15,14 +15,25 @@ repositories {
     mavenCentral()
 }
 
+ext {
+  dockerJavaVersion = "3.3.4"
+  vertxVersion = "4.5.1"
+}
+
 dependencies {
-    // Use JUnit Jupiter for testing.
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+	annotationProcessor 'org.projectlombok:lombok:1.18.30'
+	
+	testCompileOnly 'org.projectlombok:lombok:1.18.30'
+	testAnnotationProcessor 'org.projectlombok:lombok:1.18.30'
 
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation platform("io.vertx:vertx-stack-depchain:$vertxVersion")
+    implementation "io.vertx:vertx-core"
+    implementation "io.vertx:vertx-web"
+    implementation "io.vertx:vertx-config"
 
-    // This dependency is used by the application.
-    implementation 'com.google.guava:guava:32.1.1-jre'
+    implementation "com.github.docker-java:docker-java:3.3.4"
+    implementation "com.github.docker-java:docker-java-transport-httpclient5:3.3.4"
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
@@ -34,7 +45,7 @@ java {
 
 application {
     // Define the main class for the application.
-    mainClass = 'yaade.io.vm.docker.manager.Main'
+    mainClass = 'io.yaade.vm.docker.manager.App'
 }
 
 tasks.named('test') {
