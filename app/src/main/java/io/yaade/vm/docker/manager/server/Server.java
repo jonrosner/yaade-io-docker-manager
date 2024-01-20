@@ -202,7 +202,7 @@ public class Server extends AbstractVerticle {
 			HostConfig hostConfig = HostConfig.newHostConfig()
 				.withBinds(new Bind("/app/data", new Volume("/" + name)))
 				.withPortBindings(
-					new PortBinding(Binding.bindPort(data.getInteger("vmPort")),
+					new PortBinding(Binding.bindPort(0),
 						new ExposedPort(containerPort)));
 
 			String imageId = image.getId();
@@ -257,9 +257,11 @@ public class Server extends AbstractVerticle {
 		System.out.println("startVM");
 		JsonObject data = ctx.body().asJsonObject();
 		String name = containerName(data.getString("id"));
+		int port;
 		try {
 			Container container = getOrCreateContainer(name, data);
 			startContainer(name, container);
+			port = container.getPorts()[0].getPublicPort();
 		} catch (Exception e) {
 			e.printStackTrace();
 			ctx.fail(e);
@@ -268,10 +270,9 @@ public class Server extends AbstractVerticle {
 		try {
 			Thread.sleep(yaadeStartupTime);
 		} catch (InterruptedException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
-		ctx.end();
+		ctx.end(new JsonObject().put("port", port).encode());
 	}
 
 	private String containerName(String id) {
