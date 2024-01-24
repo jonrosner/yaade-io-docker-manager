@@ -8,6 +8,13 @@
       "type": "java",
       "name": "App",
       "request": "launch",
+      "mainClass": "io.yaade.vm.docker.manager.App",
+      "projectName": "app"
+    },
+    {
+      "type": "java",
+      "name": "App",
+      "request": "launch",
       "mainClass": "io.yaade.admin.service.App",
       "projectName": "app"
     },

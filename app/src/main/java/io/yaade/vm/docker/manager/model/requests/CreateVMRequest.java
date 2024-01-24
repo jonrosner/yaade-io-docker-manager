@@ -8,6 +8,6 @@ public record CreateVMRequest(
     String yaadeAdminPwd) {
 
     public String vmName() {
-        return "yaade" + instanceId.toString();
+        return "yaade-" + instanceId.toString();
     }
 }

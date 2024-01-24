@@ -8,7 +8,10 @@ public class App {
     public static void main(String[] args) {
         Vertx vertx = Vertx.vertx();
         Config.init(vertx)
-            .onSuccess((config) -> vertx.deployVerticle(new Server(config)))
+            .onSuccess((config) -> {
+                System.out.println(config);
+                vertx.deployVerticle(new Server(config));
+            })
             .onFailure(e -> e.printStackTrace());
     }
 }

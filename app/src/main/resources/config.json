@@ -1,8 +1,9 @@
 {
-	"port": 8091,
-	"allowed_ips": ["127.0.0.1"],
-	"max_docker_clients": 10,
-	"image_name": "esperotech/yaade:latest",
-	"container_port": 9339,
-	"yaade_startup_time": 3000
+  "port": 8091,
+  "allowed_ips": ["127.0.0.1"],
+  "max_docker_clients": 2,
+  "image_name": "esperotech/yaade:latest",
+  "container_port": 9339,
+  "yaade_startup_time": 3000,
+  "max_vms": 2
 }
